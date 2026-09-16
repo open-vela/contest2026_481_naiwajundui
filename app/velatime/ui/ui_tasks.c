@@ -227,6 +227,9 @@ void velatime_ui_task_actions_show(const char *task_id)
   lv_obj_center(back_label);
   lv_obj_add_event_cb(btn_back, on_actions_back, LV_EVENT_CLICKED, NULL);
 
+  /* 常驻翻页栏（二级页面，不高亮任何一个） */
+  velatime_ui_build_nav(scr, VELATIME_PAGE_OTHER);
+
   lv_scr_load(scr);
 }
 
@@ -340,6 +343,9 @@ void velatime_ui_tasks_show(void)
   lv_label_set_text(back_label, "返回");
   lv_obj_center(back_label);
   lv_obj_add_event_cb(btn_back, on_back_click, LV_EVENT_CLICKED, NULL);
+
+  /* 常驻翻页栏 */
+  velatime_ui_build_nav(scr, VELATIME_PAGE_TASKS);
 
   lv_scr_load(scr);
 }

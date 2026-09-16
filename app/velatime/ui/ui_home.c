@@ -1,30 +1,124 @@
 #include "velatime_ui.h"
 #include "../core/core_recommend.h"
+#include "../core/core_schedule.h"
 #include "../core/core_task.h"
 #include "../core/core_agent_sync.h"
 
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
-/* 首页：统一按 1280x800 基准排版（左右边距 32，内容左对齐成一条竖线） */
+/*
+ * W1 首页 —— 圆形表盘（454x454 圆屏，为真机烧录准备）
+ *
+ * 设计定稿（用户 2026-09-16 手稿 + 说明）：
+ *   - **不显示"现在推荐"的决策卡片**：那块内容属于通知中心(W5)。
+ *   - 只放：当前时间 + 日期 + 一个小信封（有未完成任务时亮红点）。
+ *   - 系统**不再主动弹窗**打扰用户；用户自己点信封进通知中心。
+ *
+ * 圆屏做法（关键）：
+ *   真机是圆的，方屏四角会被物理圆框切掉。所以本页自己画一个
+ *   "表盘圆"：一个直径 = 屏幕宽度、圆角 = 半径的实心圆对象，
+ *   屏幕底色设为纯黑。这样四角天然是黑的，观感就是一块圆表。
+ *   所有内容都放在这个圆内，并按半径收敛位置，保证不贴边。
+ *
+ * 目标屏幕 454x454 圆屏，所有尺寸按运行时实际分辨率按比例计算，
+ * 因此 1280x800 模拟器上同样能正常显示。
+ */
 
-static lv_obj_t *g_card_title = NULL;
-static lv_obj_t *g_card_meta = NULL;
-static lv_obj_t *g_card_reason = NULL;
-static lv_obj_t *g_btn_start = NULL;
-static lv_obj_t *g_btn_delay = NULL;
-static lv_obj_t *g_status_label = NULL;
+/*
+ * 本页只用文字/强调/危险三色；表盘底色、圆外黑底
+ * 都由 ui_theme.c 的共用主题负责。
+ * 环形刻度用到的两个色单独定义，避免依赖主题内部宏。
+ */
+#define CLR_TEXT     0xFFFFFF
+#define CLR_MUTED    0x9AA3B4    /* 次要文字：在盘面上保持可读 */
+#define CLR_ACCENT   0xFF8A3D
+#define CLR_RED      0xFF3B30
+#define CLR_RING_BG  0x3A4356    /* 环形刻度底：与盘面同色系、更亮一档 */
+#define CLR_RING_FG  0xFF8A3D    /* 环形刻度高亮段 */
+
+/* 诊断开关：为 1 时显示最近识别到的手势方向（确认手势生效后可改 0） */
+#define VELATIME_UI_GESTURE_DIAG 1
+
+static lv_obj_t *g_time_label = NULL;
+static lv_obj_t *g_date_label = NULL;
+static lv_obj_t *g_envelope = NULL;
+static lv_obj_t *g_badge = NULL;
+static lv_obj_t *g_diag_label = NULL;
+static lv_timer_t *g_clock_timer = NULL;
+
 static char g_reminder[192] = "";
-static int g_reminder_shown = 0;
 
-/* 提醒不挤占卡片（卡片固定显示推荐理由），改为弹出提醒页。
-   用 g_reminder_shown 防止用户关掉弹窗后又被立刻弹回。 */
-static void apply_reminder_text(void)
+/* ---------------------------------------------------------------- */
+/* 时间 / 日期                                                        */
+/* ---------------------------------------------------------------- */
+
+static void update_clock(void)
 {
-  if (g_reminder[0] != '\0' && !g_reminder_shown)
+  static const char *wday[7] = { "日", "一", "二", "三", "四", "五", "六" };
+  struct timespec ts;
+  struct tm tm_now;
+  char time_buf[16];
+  char date_buf[32];
+
+  if (clock_gettime(CLOCK_REALTIME, &ts) != 0 ||
+      localtime_r(&ts.tv_sec, &tm_now) == NULL)
     {
-      g_reminder_shown = 1;
-      velatime_ui_popup_show();
+      return;
+    }
+
+  if (g_time_label != NULL)
+    {
+      snprintf(time_buf, sizeof(time_buf), "%02d:%02d",
+               tm_now.tm_hour, tm_now.tm_min);
+      lv_label_set_text(g_time_label, time_buf);
+    }
+
+  if (g_date_label != NULL)
+    {
+      snprintf(date_buf, sizeof(date_buf), "%d月%d日 · 周%s",
+               tm_now.tm_mon + 1, tm_now.tm_mday, wday[tm_now.tm_wday]);
+      lv_label_set_text(g_date_label, date_buf);
+    }
+}
+
+/* ---------------------------------------------------------------- */
+/* 信封红点：有未完成任务就点亮                                          */
+/* ---------------------------------------------------------------- */
+
+static int has_pending_work(void)
+{
+  int i;
+  int total = core_task_count();
+
+  for (i = 0; i < total; i++)
+    {
+      const velatime_task_t *t = core_task_get(i);
+
+      if (t != NULL && t->status != VELATIME_STATUS_DONE)
+        {
+          return 1;
+        }
+    }
+
+  return 0;
+}
+
+static void update_badge(void)
+{
+  if (g_badge == NULL)
+    {
+      return;
+    }
+
+  if (has_pending_work())
+    {
+      lv_obj_remove_flag(g_badge, LV_OBJ_FLAG_HIDDEN);
+    }
+  else
+    {
+      lv_obj_add_flag(g_badge, LV_OBJ_FLAG_HIDDEN);
     }
 }
 
@@ -37,203 +131,269 @@ void velatime_ui_set_reminder(const char *text)
 
   strncpy(g_reminder, text, sizeof(g_reminder) - 1);
   g_reminder[sizeof(g_reminder) - 1] = '\0';
-  g_reminder_shown = 0;          /* 新提醒：允许弹一次 */
-  apply_reminder_text();
+
+  /* 不自动弹窗：只点亮红点，用户自己进通知中心看 */
+  update_badge();
 }
 
 void velatime_ui_home_refresh(void)
 {
-  velatime_recomm_book_t rec;
-  char meta[96];
-  int has_rec;
+  update_badge();
+}
 
-  if (g_card_title == NULL || g_card_meta == NULL ||
-      g_card_reason == NULL)
+static void clock_timer_cb(lv_timer_t *timer)
+{
+  (void)timer;
+  update_clock();
+}
+
+/* ---------------------------------------------------------------- */
+/* 手势（LVGL 原生）                                                  */
+/* ---------------------------------------------------------------- */
+
+static void enable_gesture_bubble(lv_obj_t *obj)
+{
+  if (obj != NULL)
+    {
+      lv_obj_add_flag(obj, LV_OBJ_FLAG_GESTURE_BUBBLE);
+    }
+}
+
+static void on_home_gesture(lv_event_t *e)
+{
+  lv_indev_t *indev = lv_indev_active();
+  lv_dir_t dir;
+
+  (void)e;
+
+  if (indev == NULL)
     {
       return;
     }
 
-  has_rec = core_recommend_pick(core_recommend_today_weekday(), &rec);
-  lv_label_set_text(g_card_title,
-                    has_rec ? rec.task_title : "暂无任务");
+  dir = lv_indev_get_gesture_dir(indev);
 
-  snprintf(meta, sizeof(meta), "%d 分钟空闲 · 建议 %s 开始",
-           has_rec ? rec.available_minutes : 0,
-           has_rec ? rec.suggested_start : "--");
-  lv_label_set_text(g_card_meta, meta);
-  lv_label_set_text(g_card_reason,
-                    has_rec ? rec.reason : "对 Agent 说：帮我创建一个任务");
-
-  if (g_btn_start != NULL && g_btn_delay != NULL)
+#if VELATIME_UI_GESTURE_DIAG
+  if (g_diag_label != NULL)
     {
-      if (has_rec)
+      const char *name = "NONE";
+
+      switch (dir)
         {
-          lv_obj_clear_state(g_btn_start, LV_STATE_DISABLED);
-          lv_obj_clear_state(g_btn_delay, LV_STATE_DISABLED);
+          case LV_DIR_LEFT:   name = "LEFT";   break;
+          case LV_DIR_RIGHT:  name = "RIGHT";  break;
+          case LV_DIR_TOP:    name = "UP";     break;
+          case LV_DIR_BOTTOM: name = "DOWN";   break;
+          default:            break;
         }
-      else
-        {
-          lv_obj_add_state(g_btn_start, LV_STATE_DISABLED);
-          lv_obj_add_state(g_btn_delay, LV_STATE_DISABLED);
-        }
+
+      lv_label_set_text_fmt(g_diag_label, "gesture: %s", name);
+    }
+#endif
+
+  switch (dir)
+    {
+      case LV_DIR_TOP:    velatime_ui_popup_show();    break;  /* 上滑 -> 通知中心 */
+      case LV_DIR_LEFT:   velatime_ui_tasks_show();    break;  /* 左滑 -> 任务列表 */
+      case LV_DIR_RIGHT:  velatime_ui_schedule_show(); break;  /* 右滑 -> 课程表 */
+      default: break;
     }
 }
 
-static void on_start_click(lv_event_t *e)
-{
-  velatime_recomm_book_t rec;
-  (void)e;
-
-  if (core_recommend_pick(core_recommend_today_weekday(), &rec))
-    {
-      core_task_set_status(rec.task_id, VELATIME_STATUS_DOING);
-      if (g_status_label != NULL)
-        {
-          lv_label_set_text(g_status_label, "已开始");
-        }
-
-      velatime_ui_home_refresh();
-      core_agent_sync_save();      /* 状态写回 TASKS.md，重启不丢 */
-    }
-}
-
-static void on_delay_click(lv_event_t *e)
-{
-  velatime_recomm_book_t rec;
-  (void)e;
-
-  if (core_recommend_pick(core_recommend_today_weekday(), &rec))
-    {
-      core_task_set_status(rec.task_id, VELATIME_STATUS_POSTPONED);
-      if (g_status_label != NULL)
-        {
-          lv_label_set_text(g_status_label, "已延后");
-        }
-
-      velatime_ui_home_refresh();
-      core_agent_sync_save();
-    }
-}
-
-static void on_schedule_click(lv_event_t *e)
+static void on_envelope_click(lv_event_t *e)
 {
   (void)e;
-  velatime_ui_schedule_show();
+  velatime_ui_popup_show();
 }
 
-static void on_tasks_click(lv_event_t *e)
-{
-  (void)e;
-  velatime_ui_tasks_show();
-}
+/* ---------------------------------------------------------------- */
+/* 构造                                                              */
+/* ---------------------------------------------------------------- */
 
 void velatime_ui_init(void)
 {
 }
 
+/*
+ * 小信封 + 红点。
+ * 位置用圆的半径约束，保证整体（含对角线与红点）落在圆内：
+ *   dist(圆心 -> 信封中心) + 信封半对角线 <= 半径 * 0.90
+ */
+static void build_envelope(lv_obj_t *scr, int d)
+{
+  lv_obj_t *icon;
+  lv_obj_t *flap;
+  int box = d / 7;
+  int badge = d / 26;
+  int r = d / 2;
+  int off_x;
+  int off_y;
+
+  if (box < 34)
+    {
+      box = 34;
+    }
+  if (badge < 7)
+    {
+      badge = 7;
+    }
+
+  /* 放在圆内右上方：横向 34% 半径、纵向 46% 半径。
+     此时 圆心到信封中心距离 + 信封半对角线 ≈ 0.62r，远小于半径，安全。 */
+  off_x = r * 34 / 100;
+  off_y = -(r * 46 / 100);
+
+  g_envelope = lv_button_create(scr);
+  lv_obj_set_size(g_envelope, box, box);
+  lv_obj_align(g_envelope, LV_ALIGN_CENTER, off_x, off_y);
+  lv_obj_set_style_bg_opa(g_envelope, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(g_envelope, 0, 0);
+  lv_obj_set_style_shadow_width(g_envelope, 0, 0);
+  lv_obj_set_style_pad_all(g_envelope, 0, 0);
+  enable_gesture_bubble(g_envelope);
+
+  /* 信封主体：细边圆角矩形 */
+  icon = lv_obj_create(g_envelope);
+  lv_obj_set_size(icon, box * 3 / 4, box / 2);
+  lv_obj_center(icon);
+  lv_obj_set_style_bg_opa(icon, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(icon, 2, 0);
+  lv_obj_set_style_border_color(icon, lv_color_hex(CLR_MUTED), 0);
+  lv_obj_set_style_radius(icon, 4, 0);
+  lv_obj_remove_flag(icon, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_remove_flag(icon, LV_OBJ_FLAG_CLICKABLE);
+  enable_gesture_bubble(icon);
+
+  /* 折角：一条短横线 */
+  flap = lv_obj_create(icon);
+  lv_obj_set_size(flap, box * 3 / 4 - 10, 2);
+  lv_obj_align(flap, LV_ALIGN_TOP_MID, 0, box / 8);
+  lv_obj_set_style_bg_color(flap, lv_color_hex(CLR_MUTED), 0);
+  lv_obj_set_style_bg_opa(flap, LV_OPA_60, 0);
+  lv_obj_set_style_border_width(flap, 0, 0);
+  lv_obj_remove_flag(flap, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_remove_flag(flap, LV_OBJ_FLAG_CLICKABLE);
+  enable_gesture_bubble(flap);
+
+  /* 红点 */
+  g_badge = lv_obj_create(g_envelope);
+  lv_obj_set_size(g_badge, badge, badge);
+  lv_obj_align(g_badge, LV_ALIGN_TOP_RIGHT, 2, -2);
+  lv_obj_set_style_radius(g_badge, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_color(g_badge, lv_color_hex(CLR_RED), 0);
+  lv_obj_set_style_bg_opa(g_badge, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(g_badge, 0, 0);
+  lv_obj_remove_flag(g_badge, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_remove_flag(g_badge, LV_OBJ_FLAG_CLICKABLE);
+  enable_gesture_bubble(g_badge);
+
+  lv_obj_add_event_cb(g_envelope, on_envelope_click, LV_EVENT_CLICKED, NULL);
+}
+
 void velatime_ui_home_show(void)
 {
   lv_obj_t *scr = lv_obj_create(NULL);
-  lv_obj_t *col;
-  lv_obj_t *card;
-  lv_obj_t *btn_row;
+  int w = 0;
+  int h = 0;
+  int d;
+  int r;
 
+  velatime_ui_screen_size(&w, &h);
+  if (w <= 0)
+    {
+      w = VELATIME_UI_SCREEN_W;
+    }
+  if (h <= 0)
+    {
+      h = VELATIME_UI_SCREEN_H;
+    }
+
+  d = (w < h) ? w : h;
+  r = d / 2;
+
+  /* 共用主题：纯黑底（圆外）+ 表盘圆 + 中文字库 + 关滚动。
+     五个页面用同一套，圆形观感一致。 */
   velatime_ui_style_screen(scr);
-  col = velatime_ui_page_column(scr);   /* 居中内容列，四页统一 */
 
-  lv_obj_t *title = lv_label_create(col);
-  lv_label_set_text(title, "VelaTime");
-  lv_obj_set_style_text_color(title, lv_color_hex(0xFFFFFF), 0);
+  /*
+   * 排版要点：
+   *   - 时间与日期作为一组**整体居中**，视觉锚点在圆心；
+   *   - 时间字号远大于日期，拉开层次（日期用黄色系以外的灰，避免抢焦点）；
+   *   - 盘内加一道细环形刻度，强化"这是一块表"的观感；
+   *   - 信封贴圆内右上方，动作区在顶部，不与时间抢位置。
+   */
 
-  lv_obj_t *subtitle = lv_label_create(col);
-  lv_label_set_text(subtitle, "现在推荐");
-  lv_obj_set_style_text_color(subtitle, lv_color_hex(0x8890A0), 0);
+  /* 环形刻度：只保留外圈一小段，像表盘的刻度环 */
+  {
+    lv_obj_t *ring = lv_arc_create(scr);
+    int size = d * 88 / 100;
 
-  /* 卡片：与标题同宽、同一条左边界 */
-  card = lv_obj_create(col);
-  lv_obj_set_size(card, LV_PCT(100), 300);
-  lv_obj_set_style_bg_color(card, lv_color_hex(0x1C2130), 0);
-  lv_obj_set_style_radius(card, 16, 0);
-  lv_obj_set_style_border_width(card, 0, 0);
-  lv_obj_set_style_pad_all(card, VELATIME_UI_PAD_CARD, 0);
-  lv_obj_set_style_pad_row(card, 14, 0);
-  lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
-  lv_obj_set_flex_align(card, LV_FLEX_ALIGN_START,
-                        LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-  lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_size(ring, size, size);
+    lv_obj_center(ring);
 
-  g_card_title = lv_label_create(card);
-  lv_obj_set_style_text_color(g_card_title, lv_color_hex(0xFFFFFF), 0);
-  lv_obj_set_width(g_card_title, LV_PCT(100));
-  lv_label_set_long_mode(g_card_title, LV_LABEL_LONG_WRAP);
+    /*
+     * 只画圆环，不要旋钮、不要自动可点：
+     * 底环整圈（细、暗），高亮段只留右上一段（粗、橙）。
+     * 整圈都高亮会太抢眼，只留一段更像表盘的"刻度弧"。
+     */
+    lv_arc_set_rotation(ring, 0);
+    lv_arc_set_bg_angles(ring, 0, 360);
+    lv_arc_set_angles(ring, 0, 70);
+    lv_obj_remove_style(ring, NULL, LV_PART_KNOB);
+    lv_obj_remove_flag(ring, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_bg_opa(ring, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(ring, 1, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(ring, 3, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(ring, lv_color_hex(CLR_RING_BG), LV_PART_MAIN);
+    lv_obj_set_style_arc_color(ring, lv_color_hex(CLR_RING_FG),
+                               LV_PART_INDICATOR);
+    lv_obj_set_style_arc_opa(ring, LV_OPA_50, LV_PART_MAIN);
+    lv_obj_set_style_arc_opa(ring, LV_OPA_80, LV_PART_INDICATOR);
+    lv_obj_add_flag(ring, LV_OBJ_FLAG_GESTURE_BUBBLE);
+  }
 
-  g_card_reason = lv_label_create(card);
-  lv_obj_set_style_text_color(g_card_reason, lv_color_hex(0xFF8A3D), 0);
-  lv_obj_set_width(g_card_reason, LV_PCT(100));
-  lv_label_set_long_mode(g_card_reason, LV_LABEL_LONG_WRAP);
+  /* 时间：表盘最大视觉重点，略高于圆心 */
+  g_time_label = lv_label_create(scr);
+  lv_obj_set_style_text_font(g_time_label,
+                             (d > 600) ? &lv_font_montserrat_32
+                                       : &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(g_time_label, lv_color_hex(CLR_TEXT), 0);
+  lv_obj_align(g_time_label, LV_ALIGN_CENTER, 0, -(r * 10 / 100));
 
-  g_card_meta = lv_label_create(card);
-  lv_obj_set_style_text_color(g_card_meta, lv_color_hex(0x8890A0), 0);
-  lv_obj_set_width(g_card_meta, LV_PCT(100));
-  lv_label_set_long_mode(g_card_meta, LV_LABEL_LONG_WRAP);
+  /* 日期 + 星期：紧跟时间下方，同一视觉组 */
+  g_date_label = lv_label_create(scr);
+  lv_obj_set_style_text_color(g_date_label, lv_color_hex(CLR_MUTED), 0);
+  lv_obj_align(g_date_label, LV_ALIGN_CENTER, 0, r * 16 / 100);
 
-  btn_row = lv_obj_create(card);
-  lv_obj_set_width(btn_row, LV_PCT(100));
-  lv_obj_set_height(btn_row, LV_SIZE_CONTENT);
-  lv_obj_set_style_bg_opa(btn_row, LV_OPA_TRANSP, 0);
-  lv_obj_set_style_border_width(btn_row, 0, 0);
-  lv_obj_set_style_pad_all(btn_row, 0, 0);
-  lv_obj_set_style_pad_column(btn_row, 24, 0);
-  lv_obj_set_flex_flow(btn_row, LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(btn_row, LV_FLEX_ALIGN_START,
-                        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-  lv_obj_remove_flag(btn_row, LV_OBJ_FLAG_SCROLLABLE);
+  /* 信封 + 红点（点它进通知中心） */
+  build_envelope(scr, d);
 
-  g_btn_start = lv_button_create(btn_row);
-  lv_obj_set_size(g_btn_start, VELATIME_UI_BTN_W, VELATIME_UI_BTN_H);
-  lv_obj_t *start_label = lv_label_create(g_btn_start);
-  lv_label_set_text(start_label, "现在开始");
-  lv_obj_center(start_label);
-  lv_obj_add_event_cb(g_btn_start, on_start_click, LV_EVENT_CLICKED, NULL);
+  /* 常驻翻页栏（任务 · 首页 · 课表）：手势失效时靠它切页 */
+  velatime_ui_build_nav(scr, VELATIME_PAGE_HOME);
 
-  g_btn_delay = lv_button_create(btn_row);
-  lv_obj_set_size(g_btn_delay, VELATIME_UI_BTN_W, VELATIME_UI_BTN_H);
-  lv_obj_t *delay_label = lv_label_create(g_btn_delay);
-  lv_label_set_text(delay_label, "稍后提醒");
-  lv_obj_center(delay_label);
-  lv_obj_add_event_cb(g_btn_delay, on_delay_click, LV_EVENT_CLICKED, NULL);
+#if VELATIME_UI_GESTURE_DIAG
+  /* 诊断行：放到最顶部（细小、不干扰主体），确认手势是否生效用 */
+  g_diag_label = lv_label_create(scr);
+  lv_label_set_text(g_diag_label, "gesture: none");
+  lv_obj_set_style_text_font(g_diag_label, &lv_font_montserrat_12, 0);
+  lv_obj_set_style_text_color(g_diag_label, lv_color_hex(CLR_MUTED), 0);
+  lv_obj_align(g_diag_label, LV_ALIGN_TOP_MID, 0, r * 20 / 100);
+#else
+  g_diag_label = NULL;
+#endif
 
-  g_status_label = lv_label_create(col);
-  lv_label_set_text(g_status_label, "");
-  lv_obj_set_style_text_color(g_status_label, lv_color_hex(0x00D26A), 0);
+  /* 屏幕负责接收冒泡上来的手势 */
+  lv_obj_add_flag(scr, LV_OBJ_FLAG_CLICKABLE);
+  enable_gesture_bubble(scr);
+  lv_obj_add_event_cb(scr, on_home_gesture, LV_EVENT_GESTURE, NULL);
 
-  /* 底部导航：吸到内容列底部、与内容同宽，按钮从左侧排开 */
-  lv_obj_t *nav = lv_obj_create(col);
-  lv_obj_set_size(nav, LV_PCT(100), VELATIME_UI_BTN_H);
-  lv_obj_align(nav, LV_ALIGN_BOTTOM_LEFT, 0, 0);
-  lv_obj_set_style_bg_opa(nav, LV_OPA_TRANSP, 0);
-  lv_obj_set_style_border_width(nav, 0, 0);
-  lv_obj_set_style_pad_all(nav, 0, 0);
-  lv_obj_set_style_pad_column(nav, 24, 0);
-  lv_obj_set_flex_flow(nav, LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(nav, LV_FLEX_ALIGN_START,
-                        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-  lv_obj_remove_flag(nav, LV_OBJ_FLAG_SCROLLABLE);
+  /* 时钟每秒刷新；只建一个定时器，避免反复进首页时泄漏 */
+  if (g_clock_timer == NULL)
+    {
+      g_clock_timer = lv_timer_create(clock_timer_cb, 1000, NULL);
+    }
 
-  lv_obj_t *btn_sched = lv_button_create(nav);
-  lv_obj_set_size(btn_sched, VELATIME_UI_BTN_W, VELATIME_UI_BTN_H);
-  lv_obj_t *sched_label = lv_label_create(btn_sched);
-  lv_label_set_text(sched_label, "课程表");
-  lv_obj_center(sched_label);
-  lv_obj_add_event_cb(btn_sched, on_schedule_click, LV_EVENT_CLICKED, NULL);
-
-  lv_obj_t *btn_tasks = lv_button_create(nav);
-  lv_obj_set_size(btn_tasks, VELATIME_UI_BTN_W, VELATIME_UI_BTN_H);
-  lv_obj_t *tasks_label = lv_label_create(btn_tasks);
-  lv_label_set_text(tasks_label, "任务列表");
-  lv_obj_center(tasks_label);
-  lv_obj_add_event_cb(btn_tasks, on_tasks_click, LV_EVENT_CLICKED, NULL);
-
-  velatime_ui_home_refresh();
+  update_clock();
+  update_badge();
   lv_scr_load(scr);
 }

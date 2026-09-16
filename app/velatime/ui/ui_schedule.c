@@ -147,5 +147,8 @@ void velatime_ui_schedule_show(void)
   lv_obj_center(back_label);
   lv_obj_add_event_cb(btn_back, on_back_click, LV_EVENT_CLICKED, NULL);
 
+  /* 常驻翻页栏 */
+  velatime_ui_build_nav(scr, VELATIME_PAGE_SCHEDULE);
+
   lv_scr_load(scr);
 }

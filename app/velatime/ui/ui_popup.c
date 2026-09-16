@@ -5,12 +5,27 @@
 
 #include <stdio.h>
 
-/* 主动提醒弹窗：展示 Agent 或端侧给出的提醒，并可直接操作 */
+/* 通知中心（W5）：展示 Agent 或端侧给出的提醒，并可直接操作。
+   设计变更（2026-09-16）：不再是"主动弹窗"打断用户，而是用户从 W1 点信封
+   主动进入。系统只负责点亮 W1 的红点，看不看由用户自己决定。 */
 
 static void on_close_click(lv_event_t *e)
 {
   (void)e;
   velatime_ui_home_show();
+}
+
+/* 下滑关闭通知中心，回到 W1（与"点信封进入"对称） */
+static void on_notify_gesture(lv_event_t *e)
+{
+  lv_indev_t *indev = lv_indev_active();
+
+  (void)e;
+
+  if (indev != NULL && lv_indev_get_gesture_dir(indev) == LV_DIR_BOTTOM)
+    {
+      velatime_ui_home_show();
+    }
 }
 
 static void on_start_click(lv_event_t *e)
@@ -53,7 +68,7 @@ void velatime_ui_popup_show(void)
   lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE);
 
   lv_obj_t *title = lv_label_create(card);
-  lv_label_set_text(title, "主动提醒");
+  lv_label_set_text(title, "通知中心");
   lv_obj_set_style_text_color(title, lv_color_hex(0xFF8A3D), 0);
 
   lv_obj_t *task = lv_label_create(card);
@@ -122,6 +137,13 @@ void velatime_ui_popup_show(void)
   lv_label_set_text(back_label, "返回首页");
   lv_obj_center(back_label);
   lv_obj_add_event_cb(btn_back, on_close_click, LV_EVENT_CLICKED, NULL);
+
+  /* 手势：下滑关闭（与 W1 点信封进入对称） */
+  lv_obj_add_flag(scr, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(scr, on_notify_gesture, LV_EVENT_GESTURE, NULL);
+
+  /* 常驻翻页栏（通知中心属二级页面，不高亮任何一个） */
+  velatime_ui_build_nav(scr, VELATIME_PAGE_OTHER);
 
   lv_scr_load(scr);
 }
