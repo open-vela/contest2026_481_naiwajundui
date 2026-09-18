@@ -75,6 +75,7 @@ static void build_slot_row(lv_obj_t *parent, const velatime_free_slot_t *slot)
 
 void velatime_ui_schedule_show(void)
 {
+  velatime_ui_set_page_index(VELATIME_PAGE_IDX_SCHEDULE);
   velatime_free_slot_t slots[VELATIME_FREE_SLOT_MAX];
   int weekday = core_recommend_today_weekday();
   int slot_count;
