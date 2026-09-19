@@ -44,6 +44,44 @@ beswatch &
 velatime &
 #endif
 
+/*
+ * ------------------------------------------------------------------
+ * WiFi 自动连接（VelaTime 演示用，2026-09-19）
+ * ------------------------------------------------------------------
+ * 板子上电后自动加入局域网，手机浏览器才能通过网页控制台
+ * (http://<主机IP>:5000) 访问开发板。
+ *
+ * 三个必须注意的点（都是实测踩出来的）：
+ *   1) wapi 的 flag 参数是【字符串】，写数字会被驱动拒绝：
+ *        wapi essid wlan0 SSID 1              -> bes_wl_set_ssid ret=-22 (EINVAL)
+ *        wapi essid wlan0 SSID WAPI_ESSID_ON  -> OK
+ *   2) 密码要先设（psk），再由 essid 触发连接 ——
+ *      essid 内部会调用 bwifi_add_network 把 ssid+passwd 一起提交。
+ *   3) renew 报 netlib_obtain_ipv4addr() failed 是正常的：
+ *      真正的 DHCP 由驱动在 associate 成功后内部完成，
+ *      所以 renew 放后台补一次即可，不阻塞启动。
+ */
+/*
+ * 必须等 WiFi 驱动就绪再连（实测启动时间轴）：
+ *   ~1.75s  rcS 执行到这里 —— 此时驱动还没好，
+ *           ifup wlan0 会 Failed，wapi essid 报 ioctl 25 (ENOTTY)
+ *   ~1.98s  [WF-RPMSG] wifi_host_rpmsg_bind success   ← 驱动才 bind
+ *   ~2.69s  wifi_hal_init rsp:1
+ * 所以先 sleep 8。这段放在 velatime & 之后，不会拖慢界面启动。
+ *
+ * 命令顺序也是实测出来的 —— 少了 mode 或 DELAY_ON 就会 ret=-22：
+ *   ❌ ifup -> psk -> essid ON                             -> bes_wl_set_ssid ret=-22
+ *   ✅ ifup -> mode MANAGED -> psk -> essid DELAY_ON -> essid ON
+ *     第二次 ON 才会走 bwifi_add_network(ssid, passwd) 并触发 CONNECTING
+ */
+sleep 8
+ifup wlan0
+wapi mode wlan0 WAPI_MODE_MANAGED
+wapi psk wlan0 <YOUR_WIFI_PASSWORD> 1
+wapi essid wlan0 <YOUR_WIFI_SSID> WAPI_ESSID_DELAY_ON
+wapi essid wlan0 <YOUR_WIFI_SSID> WAPI_ESSID_ON
+renew wlan0 &
+
 #ifdef CONFIG_KVDB_PERSIST_PATH
 #ifdef CONFIG_KVDB_FILE
 mkdir -p CONFIG_KVDB_PERSIST_PATH
