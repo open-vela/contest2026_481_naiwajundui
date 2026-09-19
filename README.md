@@ -236,9 +236,29 @@ debug 时，Werkzeug 调试器允许远程执行任意代码（仓库已修复�
 
 | 官方要求 | 本项目的满足方式 |
 |---|---|
-| 编译 openvela + ai_agent 并在设备上运行 | ✅ 模拟器完整跑通（真机 BES 2800BP 适配中） |
+| 编译 openvela + ai_agent 并在设备上运行 | ✅ **模拟器**：openvela + `ai_agent` 完整跑通，可用自然语言建任务<br>✅ **真机 BES2800BP**：openvela + VelaTime 已烧录运行（开机自启、自动联网、454 圆屏）<br>⚠️ 真机当前未编入 `ai_agent`（见下方说明） |
 | 至少 1 个自定义 Skill | ✅ `task-manager.md`（Student Task Planner，含主动推荐流程） |
-| 至少 1 个"主动 + 执行"场景 | ✅ heartbeat 定时触发 → Agent 选任务 → 写入提醒 → 应用显示 |
-| 完整应用场景说明 | 见本文第一、三、四节 |
-| AI Coding 日志 | `logs/`（见该目录 README） |
-| 通过 PR 提交到专属仓 | fork → PR → 自行 review 合入 |
+| 至少 1 个"主动 + 执行"场景 | ✅ heartbeat 定时触发 → Agent 选任务 → 写入提醒 → 应用显示<br>✅ 另有**端侧即时提醒**：不依赖网络与模型，离线也能演示 |
+| 完整应用场景说明 | 见本文第一、三、四节，以及第九节（手机网页控制台） |
+| AI Coding 日志 | `logs/`（3 个会话，见该目录 README） |
+| 通过 PR 提交到专属仓 | ✅ fork → [PR #1](https://github.com/open-vela/contest2026_481_naiwajundui/pull/1) → CLA 已签 → `mergeable_state: clean` |
+
+### 关于真机上的 ai_agent
+
+真机的 AP 镜像里**没有编入 `ai_agent`**（`EXAMPLES_AI_AGENT_VELA` 未启用），
+因此真机上目前是**纯端侧模式**：本地规则推荐 + 端侧即时提醒 + 文件桥，
+不依赖大模型也能完整演示。
+
+`ai_agent` 未编入的原因与后续路径：
+
+```
+✅ 板子已有：TLS(mbedtls) / HTTP(webclient) / JSON(cjson) / DHCP / DNS
+✅ 板子已有：WiFi，且已做进启动脚本开机自动联网（实测拿到 IP 并可 ping 通）
+✅ 板子已有：CONFIG_WIRELESS_WAPI / DHCPC / NETDB
+
+⬜ 还需：defconfig 加 CONFIG_EXAMPLES_AI_AGENT_VELA=y 并重编（源码 78 个 .c）
+⬜ 还需：运行时 set_llm <端点> <模型> <Key> 配置小米 MiMo Token Plan
+         （端点 https://token-plan-cn.xiaomimimo.com/v1，模型 mimo-v2.5）
+
+即"联网能力已具备，只差把 Agent 编进去并配 Key"。
+模拟器侧该链路已完整验证过（见 logs/dev_timeline.md 阶段 2）。
