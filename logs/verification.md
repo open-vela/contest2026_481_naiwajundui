@@ -136,3 +136,85 @@ garbage            urgency= 20  reason=30 分钟可完成，适合现在开始
   因此"应用运行中改文件"这类操作需要人在模拟器窗口操作
 - 宿主机为 Wayland 会话时 `xwd`/GNOME 截图接口均不可用，界面验收需人工截图
 - Agent heartbeat 默认 30 分钟触发一次；演示时可等待，或让端侧即时提醒先展示
+
+---
+
+## 真机验收（2026-09-19，BES2800BP / 454 圆屏）
+
+### 1. 应用运行
+
+```
+$ ps
+PID  GROUP PRI POLICY TYPE   STATE   STACK    USED  CPU   COMMAND
+11   11    100 RR      Task   Ready   0040816  0012544 30.7% velatime
+```
+
+`velatime` 开机自启（启动脚本 `rcS.ap` 里 `velatime &`），
+官方 `lvgldemo widgets` 已不再出现。
+
+### 2. 滑动切页
+
+串口日志（120 秒监听窗口内）：
+```
+VelaTime: swipe right -> schedule (d=262,28)
+VelaTime: swipe left  -> tasks    (d=-225,-4)
+VelaTime: swipe right -> schedule (d=240,21)
+VelaTime: swipe left  -> tasks    (d=-305,43)
+...（共 24 次，左右交替）
+```
+显示侧同时可见双缓冲提交：
+```
+PANDBG commit cnt=1 frame=7 addr=0x3823a8c0 yoffset=0   state=3
+PANDBG commit cnt=1 frame=8 addr=0x38308440 yoffset=454 state=3
+```
+
+### 3. 界面
+
+| 页面 | 内容 |
+|---|---|
+| W1 表盘 | 中心时间 72px（总宽约 206px，不再压住 10/9/2/3）+ 日期星期信封 + 翻页栏 |
+| W2 课表 | 27 个每周时段 |
+| W3 任务列表 | 纯文字行 + 底部 1px 白线，行背景透明 |
+| W4 任务详情 | 标题底边线 + 药丸按钮（完成/延后/删除） |
+| W5 通知中心 | 药丸形面板，无操作按钮，滑动关闭 |
+
+### 4. 网络
+
+```
+$ ifconfig wlan0
+wlan0  Link encap:Ethernet HWaddr 00:80:43:e0:0c:fa at RUNNING mtu 1500
+       inet addr:192.168.0.169 DRaddr:192.168.0.1 Mask:255.255.255.0
+
+$ ping -c 3 192.168.0.96
+56 bytes from 192.168.0.96: icmp_seq=1 time=310.8 ms
+56 bytes from 192.168.0.96: icmp_seq=2 time=237.3 ms
+3 packets transmitted, 2 received, 33% packet loss
+
+$ nslookup www.baidu.com
+Host: www.baidu.com Addr: 183.2.172.177
+```
+
+**开机无需任何手动操作即自动联网。**
+
+### 5. 网页控制台
+
+```
+$ curl http://127.0.0.1:5000/api/daily
+{"quote":"今天也辛苦了","daily_goal":8000,"theme":"light", ...}
+
+$ curl -X POST http://127.0.0.1:5000/api/ping \
+       -H 'Content-Type: application/json' -d '{"device_id":"BES2800BP"}'
+{"status":"ok"}
+```
+
+### 6. 烧录记录
+
+```
+burn_file/--- Burn magic number: addr=0x30190000 value=0xBE57EC1C ---
+sys_cmd_boot_cmd/--- Send SYS REBOOT msg ---
+---------------------
+PROGRAMMING SUCCEEDED
+---------------------
+```
+
+镜像 6,381,080 字节 / 分区 9,961,472 字节。
