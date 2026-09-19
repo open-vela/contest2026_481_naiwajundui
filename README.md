@@ -110,10 +110,21 @@ board/bes2800bp/                # 真机（BES2800BP）板级适配
 └── README.md                   # 编译、烧录、联网完整复现说明
 
 logs/                           # AI Coding 日志（大赛必交）
+docs/REAL_DEVICE_EVIDENCE.md    # 真机验证证据（命令与实拍输出）
 ```
 
 > ⚠️ 注意事项：NuttX CMake 的 `INCDIR` 在本工程不生效，**所有头文件必须用相对路径 include**；
 > 新增 `.c` 文件必须手工加入 `CMakeLists.txt` 的 `SRCS`。
+
+## 五点五、真机验证证据
+
+真机（BES2800BP）的完整验证记录单独成文：**[`docs/REAL_DEVICE_EVIDENCE.md`](docs/REAL_DEVICE_EVIDENCE.md)**
+
+内容包括：镜像指纹、烧录输出、开机自启、内存占用、滑动切页的串口日志、
+开机自动联网、开机自动校时、表盘时区、AI Agent 上板、云端大模型接通，
+以及**如实列出的已知边界**（哪些没做）。
+
+每条证据都按「命令 → 实际输出」成对给出，可直接对照复现。
 
 ## 六、构建与运行
 
