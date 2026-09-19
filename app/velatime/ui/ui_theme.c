@@ -243,6 +243,64 @@ void velatime_ui_style_screen(lv_obj_t *scr)
 /* 当前页序（滑动切页用）：-1 表示不在三页之内（如详情页/通知页） */
 static int g_page_index = VELATIME_PAGE_IDX_OTHER;
 
+/* ---- 屏幕缓存（2026-09-20，滑动卡顿优化）---- */
+/*
+ * 每个页面构建一次后缓存在这里，切回时直接复用。
+ * stale 标记表示"数据变了，下次进入要重建"。
+ * 旧屏幕不在这里删 —— 要等新屏幕 load 之后再删，避免删掉活动屏幕。
+ */
+#define VELATIME_SCR_CACHE_SLOTS  8
+
+static lv_obj_t *g_scr_cache[VELATIME_SCR_CACHE_SLOTS];
+static bool      g_scr_stale[VELATIME_SCR_CACHE_SLOTS];
+
+lv_obj_t *velatime_ui_scr_cache_get(int idx)
+{
+  if (idx < 0 || idx >= VELATIME_SCR_CACHE_SLOTS || g_scr_stale[idx])
+    {
+      return NULL;    /* 标脏时对外表现得像没有缓存 */
+    }
+
+  return g_scr_cache[idx];
+}
+
+void velatime_ui_scr_cache_put(int idx, lv_obj_t *scr)
+{
+  if (idx < 0 || idx >= VELATIME_SCR_CACHE_SLOTS)
+    {
+      return;
+    }
+
+  g_scr_cache[idx] = scr;
+  g_scr_stale[idx] = false;
+}
+
+void velatime_ui_scr_cache_invalidate(int idx)
+{
+  if (idx < 0 || idx >= VELATIME_SCR_CACHE_SLOTS)
+    {
+      return;
+    }
+
+  g_scr_stale[idx] = true;
+}
+
+/* 取旧屏幕用于稍后删除；顺带把槽位让出来 */
+lv_obj_t *velatime_ui_scr_cache_take_old(int idx)
+{
+  lv_obj_t *old = NULL;
+
+  if (idx < 0 || idx >= VELATIME_SCR_CACHE_SLOTS)
+    {
+      return NULL;
+    }
+
+  old = g_scr_cache[idx];
+  g_scr_cache[idx] = NULL;
+  g_scr_stale[idx] = false;
+  return old;
+}
+
 void velatime_ui_set_page_index(int idx)
 {
   g_page_index = idx;

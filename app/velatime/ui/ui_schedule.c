@@ -5,13 +5,6 @@
 
 #include <stdio.h>
 
-/* 课程表：与其它页面共用统一布局度量（边距 32 / 内容等宽 1216 / 左对齐） */
-
-static void on_back_click(lv_event_t *e)
-{
-  (void)e;
-  velatime_ui_home_show();
-}
 
 static void build_course_row(lv_obj_t *parent, const velatime_course_t *course)
 {
@@ -76,6 +69,18 @@ static void build_slot_row(lv_obj_t *parent, const velatime_free_slot_t *slot)
 void velatime_ui_schedule_show(void)
 {
   velatime_ui_set_page_index(VELATIME_PAGE_IDX_SCHEDULE);
+
+  /* 2026-09-20 缓存优化：课表页内容不随时间变化，直接复用 */
+  {
+    lv_obj_t *cached = velatime_ui_scr_cache_get(VELATIME_PAGE_IDX_SCHEDULE);
+
+    if (cached != NULL)
+      {
+        lv_scr_load(cached);
+        return;
+      }
+  }
+
   velatime_free_slot_t slots[VELATIME_FREE_SLOT_MAX];
   int weekday = core_recommend_today_weekday();
   int slot_count;
@@ -111,13 +116,32 @@ void velatime_ui_schedule_show(void)
   lv_obj_set_style_text_color(subtitle, lv_color_hex(0x8890A0), 0);
 
   list = lv_obj_create(col);
-  lv_obj_set_size(list, LV_PCT(100), 520);
+
+  /*
+   * 2026-09-20 修正：原来这里写死高度 520px。
+   *
+   * 454 屏幕上 col 只有约 285px（圆的内切安全区），
+   * 而 col 里的标题 + 副标题 + list(520) 合计约 608px，
+   * 超出 300 多 px；col 又在 velatime_ui_page_column() 里被禁用了滚动，
+   * 于是下半部分的课程既看不到、也滑不动。
+   *
+   * 改成 flex 纵向容器里占满剩余高度：
+   *   - 不再依赖任何硬编码像素，任何分辨率都成立；
+   *   - list 自身保留 LV_DIR_VER，课程多了会自然出现上下滚动。
+   * 注：原来的「返回」按钮已按要求移除，页面底部现在是翻页栏。
+   *     导航仍可用：底部常驻翻页栏 + 左右滑动切页。
+   */
+  lv_obj_set_width(list, LV_PCT(100));
+  lv_obj_set_flex_grow(list, 1);
+
   lv_obj_set_style_bg_opa(list, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(list, 0, 0);
   lv_obj_set_style_pad_all(list, 0, 0);
   lv_obj_set_style_pad_row(list, 12, 0);
   lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_scroll_dir(list, LV_DIR_VER);
+  /* 内容超出时显示滚动条，让"可以滑"这件事一眼可见 */
+  lv_obj_set_scrollbar_mode(list, LV_SCROLLBAR_MODE_AUTO);
 
   for (i = 0; i < core_schedule_count(); i++)
     {
@@ -140,16 +164,23 @@ void velatime_ui_schedule_show(void)
       lv_obj_set_style_text_color(empty, lv_color_hex(0x8890A0), 0);
     }
 
-  lv_obj_t *btn_back = lv_button_create(col);
-  lv_obj_set_size(btn_back, VELATIME_UI_BTN_W, VELATIME_UI_BTN_H);
-  lv_obj_align(btn_back, LV_ALIGN_BOTTOM_LEFT, 0, 0);
-  lv_obj_t *back_label = lv_label_create(btn_back);
-  lv_label_set_text(back_label, "返回");
-  lv_obj_center(back_label);
-  lv_obj_add_event_cb(btn_back, on_back_click, LV_EVENT_CLICKED, NULL);
+  /*
+   * 2026-09-20 用户要求：课程表页不需要「返回」按钮，已移除。
+   * 导航仍然可用 —— 底部常驻翻页栏（任务/首页/课表）+ 左右滑动切页。
+   */
 
   /* 常驻翻页栏 */
   velatime_ui_build_nav(scr, VELATIME_PAGE_SCHEDULE);
 
-  lv_scr_load(scr);
+  {
+    lv_obj_t *old_scr = velatime_ui_scr_cache_take_old(VELATIME_PAGE_IDX_SCHEDULE);
+
+    velatime_ui_scr_cache_put(VELATIME_PAGE_IDX_SCHEDULE, scr);
+    lv_scr_load(scr);
+
+    if (old_scr != NULL)
+      {
+        lv_obj_delete(old_scr);
+      }
+  }
 }

@@ -400,6 +400,7 @@ static void on_action_complete(lv_event_t *e)
       fflush(stdout);
     }
   g_confirm_delete = 0;
+  velatime_ui_scr_cache_invalidate(VELATIME_PAGE_IDX_TASKS);
   velatime_ui_tasks_show();
 }
 
@@ -414,6 +415,7 @@ static void on_action_postpone(lv_event_t *e)
       fflush(stdout);
     }
   g_confirm_delete = 0;
+  velatime_ui_scr_cache_invalidate(VELATIME_PAGE_IDX_TASKS);
   velatime_ui_tasks_show();
 }
 
@@ -423,7 +425,8 @@ static void on_action_delete(lv_event_t *e)
 
   if (g_active_id[0] == '\0')
     {
-      velatime_ui_tasks_show();
+      velatime_ui_scr_cache_invalidate(VELATIME_PAGE_IDX_TASKS);
+  velatime_ui_tasks_show();
       return;
     }
 
@@ -444,6 +447,7 @@ static void on_action_delete(lv_event_t *e)
 
   g_active_id[0] = '\0';
   g_confirm_delete = 0;
+  velatime_ui_scr_cache_invalidate(VELATIME_PAGE_IDX_TASKS);
   velatime_ui_tasks_show();
 }
 
@@ -466,6 +470,7 @@ static void on_actions_back(lv_event_t *e)
 {
   (void)e;
   g_confirm_delete = 0;
+  velatime_ui_scr_cache_invalidate(VELATIME_PAGE_IDX_TASKS);
   velatime_ui_tasks_show();
 }
 
@@ -899,6 +904,23 @@ static void build_row(lv_obj_t *parent, const velatime_task_t *task)
 void velatime_ui_tasks_show(void)
 {
   velatime_ui_set_page_index(VELATIME_PAGE_IDX_TASKS);
+
+  /*
+   * 2026-09-20 缓存优化：列表页也复用。
+   * 任务内容会变（完成/延后/删除、Agent 同步），那些地方会先调
+   * velatime_ui_scr_cache_invalidate(VELATIME_PAGE_IDX_TASKS)，
+   * 让这里取不到缓存、走重建分支。
+   */
+  {
+    lv_obj_t *cached = velatime_ui_scr_cache_get(VELATIME_PAGE_IDX_TASKS);
+
+    if (cached != NULL)
+      {
+        lv_scr_load(cached);
+        return;
+      }
+  }
+
   int total = core_task_count();
   int i;
   int waiting = 0;
@@ -1047,5 +1069,15 @@ void velatime_ui_tasks_show(void)
   /* ---- 底部导航：三个入口，透明大点击区（逻辑在 ui_theme.c，未改）---- */
   velatime_ui_build_nav(scr, VELATIME_PAGE_TASKS);
 
-  lv_scr_load(scr);
+  {
+    lv_obj_t *old_scr = velatime_ui_scr_cache_take_old(VELATIME_PAGE_IDX_TASKS);
+
+    velatime_ui_scr_cache_put(VELATIME_PAGE_IDX_TASKS, scr);
+    lv_scr_load(scr);
+
+    if (old_scr != NULL)
+      {
+        lv_obj_delete(old_scr);
+      }
+  }
 }

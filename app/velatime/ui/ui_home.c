@@ -275,6 +275,27 @@ static void on_home_screen_unloaded(lv_event_t *e)
 {
   (void)e;
 
+  /*
+   * 2026-09-20 缓存优化后，这个事件在【每次切走】时都会触发，
+   * 而屏幕本身还在缓存里活着 —— 所以这里只停表（省 CPU），
+   * 绝不能把控件指针清空，否则切回来时 update_clock() 会直接 return，
+   * 表盘时间就停在离开那一刻了。
+   * 真正释放屏幕时走 on_home_screen_deleted。
+   */
+  if (g_clock_timer != NULL)
+    {
+      lv_timer_delete(g_clock_timer);
+      g_clock_timer = NULL;
+    }
+
+  g_swipe_tracking = 0;
+}
+
+/* 屏幕被真正删除（缓存失效后重建）时才清指针，防野指针 */
+static void on_home_screen_deleted(lv_event_t *e)
+{
+  (void)e;
+
   if (g_clock_timer != NULL)
     {
       lv_timer_delete(g_clock_timer);
@@ -706,6 +727,33 @@ static lv_obj_t *build_envelope(lv_obj_t *parent, int d)
 void velatime_ui_home_show(void)
 {
   velatime_ui_set_page_index(VELATIME_PAGE_IDX_HOME);
+
+  /*
+   * 2026-09-20 缓存优化：切回本页时不再重建控件树。
+   * 表盘上一次已经建好，直接 load 即可 —— 这是滑动卡顿的主要来源
+   * （原来每次切页都要重建背景图 + 12 个小时数字 + 时间 + 日期 + 翻页栏）。
+   * 只需要把随时间变化的东西刷新一下：时钟、通知红点。
+   */
+  {
+    lv_obj_t *cached = velatime_ui_scr_cache_get(VELATIME_PAGE_IDX_HOME);
+
+    if (cached != NULL)
+      {
+        g_home_scr = cached;
+        lv_scr_load(cached);
+
+        /* 切走时停过表，这里重新起 */
+        if (g_clock_timer == NULL)
+          {
+            g_clock_timer = lv_timer_create(clock_timer_cb, 1000, NULL);
+          }
+
+        update_clock();
+        update_badge();
+        return;
+      }
+  }
+
   lv_obj_t *scr = lv_obj_create(NULL);
   int w = 0;
   int h = 0;
@@ -758,6 +806,7 @@ void velatime_ui_home_show(void)
 
   /* 屏幕被 auto_del 删除前，先停掉时钟定时器并清空静态指针（否则野指针崩溃） */
   lv_obj_add_event_cb(scr, on_home_screen_unloaded, LV_EVENT_SCREEN_UNLOADED, NULL);
+  lv_obj_add_event_cb(scr, on_home_screen_deleted, LV_EVENT_DELETE, NULL);
 
   /*
    * 星空背景很暗（全图平均亮度 7.1），底盘不透明度必须比月球时期低，
@@ -909,5 +958,21 @@ void velatime_ui_home_show(void)
 
   update_clock();
   update_badge();
-  lv_scr_load(scr);
+
+  /*
+   * 2026-09-20 缓存优化：
+   * 建好之后存进缓存，并把上一块屏幕释放掉。
+   * 必须【先 load 新屏、再删旧屏】，否则会把活动屏幕删掉。
+   */
+  {
+    lv_obj_t *old_scr = velatime_ui_scr_cache_take_old(VELATIME_PAGE_IDX_HOME);
+
+    velatime_ui_scr_cache_put(VELATIME_PAGE_IDX_HOME, scr);
+    lv_scr_load(scr);
+
+    if (old_scr != NULL)
+      {
+        lv_obj_delete(old_scr);
+      }
+  }
 }

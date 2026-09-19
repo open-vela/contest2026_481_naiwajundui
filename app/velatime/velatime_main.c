@@ -70,6 +70,11 @@ static void agent_sync_timer_cb(lv_timer_t *timer)
   result = core_agent_sync_if_changed();
   if (result > 0)
     {
+      /*
+       * 2026-09-20 缓存优化：Agent 改完 TASKS.md，任务列表内容变了，
+       * 必须让任务页缓存失效，否则切过去看到的还是旧列表。
+       */
+      velatime_ui_scr_cache_invalidate(VELATIME_PAGE_IDX_TASKS);
       velatime_ui_home_refresh();
       /* 任务变了：重新武装 heartbeat，让 Agent 下一次主动检查 */
       core_agent_reminder_publish(core_task_count());

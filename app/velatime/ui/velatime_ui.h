@@ -205,6 +205,19 @@ void velatime_ui_style_screen(lv_obj_t *scr);
    任何按比例排版的页面都应先调用它取尺寸，而不是直接用编译期常量。 */
 void velatime_ui_screen_size(int *w, int *h);
 
+/*
+ * 屏幕缓存（2026-09-20，滑动卡顿优化）
+ * ==================================================================
+ * 每个页面只构建一次，切回时直接 lv_scr_load 复用，不再重建控件树。
+ * 数据变化后调用 invalidate 把对应页面标脏，下次进入才重建。
+ * idx 用 VELATIME_PAGE_IDX_* 常量。
+ */
+lv_obj_t *velatime_ui_scr_cache_get(int idx);
+void      velatime_ui_scr_cache_put(int idx, lv_obj_t *scr);
+void      velatime_ui_scr_cache_invalidate(int idx);
+/* 取出旧屏幕（槽位让出），供新屏幕 load 之后删除 */
+lv_obj_t *velatime_ui_scr_cache_take_old(int idx);
+
 void velatime_ui_init(void);
 void velatime_ui_home_show(void);
 void velatime_ui_home_refresh(void);
