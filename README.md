@@ -70,7 +70,9 @@ VelaTime 不是待办清单，也不是问答机器人，而是一个**会主动
 | 任务状态机 | `ui_home` + `core_task` | Start → 进行中；Delay → 延后，并立即换下一条 |
 | 运行时自动同步 | `core_agent_sync` | Agent 改完 `TASKS.md`，界面 1~2 秒内自动刷新 |
 | **主动提醒** | `core_agent_sync` + Agent heartbeat | 设备侧定时器触发，非用户提问 |
-| 中文显示 | `ui/velatime_font_cn.c` | 自带 GB2312 一级汉字字库，3886 字形 |
+| 中文显示 | `ui/velatime_font_*.c` | 12 个分字号字库，按用途分别生成（时间/任务名/正文…） |
+| **手机网页控制台** | `website/app.py` | 课表/待办/消息/壁纸/健康数据管理，手机浏览器直接打开 |
+| **手表 ↔ 网页联动** | `website` + 板载 HTTP | 板子通过局域网拉课表、上报心率步数；网页显示设备在线 |
 
 ## 五、目录结构（比赛仓）
 
@@ -92,7 +94,22 @@ app/velatime/
     ├── ui_home.c               # 首页：推荐卡片（flex 布局）+ 按钮 + 提醒显示
     ├── ui_schedule.c / ui_tasks.c / ui_popup.c
     ├── ui_mock.[ch]            # 无 Agent 任务时的演示数据
-    └── velatime_font_cn.c      # 中文字库（lv_font_conv 生成）
+    ├── velatime_bg_moon.c      # 表盘月球背景（图片资源）
+    └── velatime_font_*.c       # 12 个分字号中文字库（lv_font_conv 生成）
+                                #   time72 / name36 / name22 / name20 / body28
+                                #   cn16 / meta17 / meta15 / nav16 / ui16 / hour56
+
+website/                        # 手机网页控制台（见第九节）
+├── app.py                      # Flask + SocketIO + SQLite，含内嵌前端
+├── requirements.txt
+└── README.md
+
+board/bes2800bp/                # 真机（BES2800BP）板级适配
+├── rcS.ap                      # 开机自启 VelaTime + 自动连 WiFi
+├── defconfig.ap                # 启用 VELATIME / WEBCLIENT / CJSON
+└── README.md                   # 编译、烧录、联网完整复现说明
+
+logs/                           # AI Coding 日志（大赛必交）
 ```
 
 > ⚠️ 注意事项：NuttX CMake 的 `INCDIR` 在本工程不生效，**所有头文件必须用相对路径 include**；
@@ -160,7 +177,62 @@ apps/packages/ai_agent/CMakeLists.txt:
 6. **include 路径**：见第五节注意事项，跨目录一律相对路径。
 7. **模拟器 `adb shell` 不可用**（`error: closed`），调试请用串口 NSH。
 
-## 九、赛道要求对照
+## 九、手机网页控制台
+
+网页控制台在 `website/`，是 VelaTime 的**手机/电脑端**：
+手表负责"在你眼前提醒"，网页负责"让你方便地录入与查看"。
+
+详细说明见 [`website/README.md`](website/README.md)，这里只列要点。
+
+### 跑起来
+
+```bash
+cd website
+pip install -r requirements.txt
+python app.py          # 监听 0.0.0.0:5000
+```
+
+手机在**同一个 WiFi** 下打开 `http://<主机IP>:5000` 即可。
+
+> Windows 上手机连不上通常是防火墙挡了入站，需要放行 5000：
+> `netsh advfirewall firewall add rule name="VelaTime Web" dir=in action=allow protocol=TCP localport=5000`
+
+### 设备（手表）接口
+
+板子侧通过局域网 HTTP 与网页通信，两侧只交换 JSON：
+
+| 接口 | 方法 | 用途 |
+|---|---|---|
+| `/api/ping` | POST | 心跳，网页据此显示"在线设备" |
+| `/api/upload` | POST | 上报心率 / 步数 |
+| `/api/schedule` | GET | 拉课表（今日 + 整周 + 空档） |
+| `/api/todos` | GET | 拉待办 |
+| `/api/messages` | GET | 拉推送给手表的消息 |
+| `/api/daily` | GET | 每日一句 / 倒计时 / 目标 / 主题 / 壁纸 |
+
+### 板子侧的网络能力（已在真机验证）
+
+BES2800BP 的 AP 镜像里 TLS / HTTP / JSON / DHCP / DNS 齐备：
+
+```
+CONFIG_CRYPTO_MBEDTLS=1        TLS（HTTPS）
+CONFIG_NETUTILS_WEBCLIENT=1    HTTP 客户端
+CONFIG_NETUTILS_CJSON=1        JSON
+CONFIG_NETUTILS_DHCPC=1        DHCP
+CONFIG_LIBC_NETDB=1            DNS
+```
+
+**开机自动连 WiFi** 已做进板级启动脚本（见
+[`board/bes2800bp/README.md`](board/bes2800bp/README.md)）：
+上电后自动加入局域网并拿到 IP，无需任何手动操作。
+
+### 安全提醒
+
+网页**没有鉴权**，所有接口开放 —— 适合局域网演示，**不要暴露到公网**。
+另外 `app.py` 的启动参数必须保持 `debug=False`：绑在 `0.0.0.0` 且开
+debug 时，Werkzeug 调试器允许远程执行任意代码（仓库已修复）。
+
+## 十、赛道要求对照
 
 | 官方要求 | 本项目的满足方式 |
 |---|---|

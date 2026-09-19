@@ -1,0 +1,11 @@
+# VelaTime 手机网页控制台依赖
+#
+# 安装：
+#   pip install -r requirements.txt
+#
+# 说明：前端图表用 CDN 加载 Chart.js 与 Socket.IO，不需要额外的 Python 包。
+flask>=3.0
+flask-socketio>=5.3
+
+# 可选：导出 Excel（/export_excel 路由）
+# openpyxl>=3.1
