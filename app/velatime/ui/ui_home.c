@@ -1,4 +1,5 @@
 #include "velatime_ui.h"
+#include "../include/velatime_time.h"
 #include "../core/core_recommend.h"
 #include "../core/core_schedule.h"
 #include "../core/core_task.h"
@@ -100,6 +101,7 @@ static lv_obj_t *g_time_mm = NULL;
  */
 #define VELATIME_TIME_GAP 14
 
+
 /* 数字文本缓冲：lv_label_set_text 不会复制字符串，
    所以这些缓冲必须是静态的，不能是栈上的临时数组 */
 static char g_hh_buf[8] = "00";
@@ -121,8 +123,21 @@ static void update_clock_inner(void)
   struct tm tm_now;
   char date_buf[32];
 
-  if (clock_gettime(CLOCK_REALTIME, &ts) != 0 ||
-      localtime_r(&ts.tv_sec, &tm_now) == NULL)
+  /*
+   * 2026-09-20: 不要再依赖 localtime_r / TZ。
+   *
+   * 板子上系统时钟是 UTC；NuttX 的 localtime_r 遇到 POSIX TZ 串
+   * （如 "CST-8"）会去找 zoneinfo 文件，找不到就退回 UTC，
+   * 于是表盘比北京时间慢 8 小时。
+   * 这里和 ai_agent 保持一致：手工 +8 小时，再用 gmtime_r 拆字段，
+   * 无论 TZ 是什么都显示北京时间。
+   */
+  if (clock_gettime(CLOCK_REALTIME, &ts) != 0)
+    {
+      return;
+    }
+
+  if (velatime_localtime(ts.tv_sec, &tm_now) == NULL)
     {
       return;
     }

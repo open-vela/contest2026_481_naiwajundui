@@ -82,6 +82,19 @@ wapi essid wlan0 <YOUR_WIFI_SSID> WAPI_ESSID_DELAY_ON
 wapi essid wlan0 <YOUR_WIFI_SSID> WAPI_ESSID_ON
 renew wlan0 &
 
+/*
+ * 校时（2026-09-20）
+ * ------------------------------------------------------------------
+ * 板子没有带电池的 RTC，上电后系统时钟是 1970，表盘时间就不对。
+ * time_sync 用明文 HTTP 读网站响应头的 Date 字段来设时钟。
+ *
+ * 必须放在 WiFi 连上之后，并且给它一点时间让链路稳定；
+ * 失败不影响其它流程（rcS 里 set +e）。
+ */
+sleep 3
+time_sync
+
+
 #ifdef CONFIG_KVDB_PERSIST_PATH
 #ifdef CONFIG_KVDB_FILE
 mkdir -p CONFIG_KVDB_PERSIST_PATH

@@ -1,4 +1,5 @@
 #include "core_recommend.h"
+#include "../include/velatime_time.h"
 #include "core_task.h"
 #include "core_schedule.h"
 
@@ -30,7 +31,7 @@ int core_recommend_today_weekday(void)
       return 1;
     }
 
-  if (localtime_r(&ts.tv_sec, &now_tm) == NULL)
+  if (velatime_localtime(ts.tv_sec, &now_tm) == NULL)
     {
       return 1;
     }
@@ -157,8 +158,8 @@ static int urgency_score(const char *deadline)
     }
 
   now = ts.tv_sec;
-  dl = mktime(&dl_tm);
-  localtime_r(&now, &today);
+  dl = velatime_mktime(&dl_tm);
+  velatime_localtime(now, &today);
 
   day_diff = day_index(&dl_tm) - day_index(&today);
   diff_minutes = (long)(dl - now) / 60;
@@ -205,7 +206,7 @@ static void build_reason(const velatime_task_t *t, int slot_minutes,
   if (clock_gettime(CLOCK_REALTIME, &ts) == 0)
     {
       now = ts.tv_sec;
-      localtime_r(&now, &today);
+      velatime_localtime(now, &today);
     }
   else
     {
@@ -216,7 +217,7 @@ static void build_reason(const velatime_task_t *t, int slot_minutes,
     {
       if (clock_gettime(CLOCK_REALTIME, &ts) == 0)
         {
-          minutes_left = (long)(mktime(&dl_tm) - ts.tv_sec) / 60;
+          minutes_left = (long)(velatime_mktime(&dl_tm) - ts.tv_sec) / 60;
         }
 
       sscanf(t->deadline, "%*d-%d-%d", &mo, &d);

@@ -5,6 +5,7 @@
 #include <lvgl/lvgl.h>
 
 #include "ui/velatime_ui.h"
+#include "include/velatime_time.h"
 #include "core/core_task.h"
 #include "core/core_schedule.h"
 #include "core/core_recommend.h"
@@ -41,7 +42,7 @@ static void publish_local_reminder(void)
   char text[192];
 
   if (clock_gettime(CLOCK_REALTIME, &ts) == 0 &&
-      localtime_r(&ts.tv_sec, &now_tm) != NULL)
+      velatime_localtime(ts.tv_sec, &now_tm) != NULL)
     {
       /* tm_wday: 0=周日 … 6=周六；VelaTime 用 1=周一 … 7=周日 */
       weekday = (now_tm.tm_wday == 0) ? 7 : now_tm.tm_wday;

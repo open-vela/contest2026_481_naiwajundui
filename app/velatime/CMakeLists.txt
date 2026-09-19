@@ -45,4 +45,26 @@ if(CONFIG_EXAMPLES_VELATIME)
     ui/velatime_font_name36.c
     ui/velatime_bg_moon.c
     ui/ui_popup.c)
+
+  # ------------------------------------------------------------------
+  # 开机校时工具（2026-09-20）
+  #
+  # BES2800BP 没有带电池的 RTC，上电后系统时钟是 1970；
+  # VelaTime 表盘直接读系统时钟，所以开机后时间不对。
+  # NSH 的 date 只读（date -s 不支持），所以这里自带一个工具：
+  # 用【明文 HTTP】读网站响应头的 Date 字段来设时钟 ——
+  # 明文 HTTP 不需要 TLS，因此不依赖系统时钟是否正确。
+  # ------------------------------------------------------------------
+  nuttx_add_application(
+    NAME
+    time_sync
+    PRIORITY
+    100
+    STACKSIZE
+    8192
+    MODULE
+    ${CONFIG_EXAMPLES_VELATIME}
+    SRCS
+    tools/time_sync_main.c)
+
 endif()

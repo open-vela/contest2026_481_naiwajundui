@@ -1,4 +1,5 @@
 #include "velatime_ui.h"
+#include "../include/velatime_time.h"
 #include "../core/core_task.h"
 #include "../core/core_recommend.h"
 #include "../core/core_schedule.h"
@@ -224,7 +225,7 @@ static void format_deadline(const velatime_task_t *task,
     }
 
   if (clock_gettime(CLOCK_REALTIME, &ts) != 0 ||
-      localtime_r(&ts.tv_sec, &now_tm) == NULL)
+      velatime_localtime(ts.tv_sec, &now_tm) == NULL)
     {
       snprintf(pre, pre_n, "%02d·%02d", mo, d);
       snprintf(mid, mid_n, "·");
@@ -235,7 +236,7 @@ static void format_deadline(const velatime_task_t *task,
   snprintf(today, sizeof(today), "%04d-%02d-%02d",
            now_tm.tm_year + 1900, now_tm.tm_mon + 1, now_tm.tm_mday);
 
-  /* 明天：交给 mktime 处理跨月跨年 */
+  /* 明天：tm_mday 直接 +1，交给 timegm 处理跨月跨年 */
   {
     struct tm t = now_tm;
 
@@ -243,7 +244,7 @@ static void format_deadline(const velatime_task_t *task,
     t.tm_hour = 12;
     t.tm_min = 0;
     t.tm_sec = 0;
-    if (mktime(&t) != (time_t)-1)
+    if (velatime_mktime(&t) != (time_t)-1)
       {
         snprintf(tomorrow, sizeof(tomorrow), "%04d-%02d-%02d",
                  t.tm_year + 1900, t.tm_mon + 1, t.tm_mday);
