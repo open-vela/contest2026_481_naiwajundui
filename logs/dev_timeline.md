@@ -183,3 +183,80 @@
   - 实测开机后自动拿到 IP 并 ping 通网页控制台主机
 - **网站并入**：队友的手机网页控制台原本只在 fork 的
   `dev-ai-contest-2026` 分支（不在 PR 分支上），并入主分支并整理
+
+## 阶段 12：AI Agent 上真机与 API 打通（9/19 夜）
+
+**目标**：把 ai_agent 编进真机，接通小米 MiMo，实现"说一句话就建任务"。
+
+- 做了什么：
+  - 板级 defconfig 启用 `CONFIG_EXAMPLES_AI_AGENT_VELA=y` 并重编
+    （镜像 6.38 → 6.49MB，只多 0.11MB，分区余量仍有 3MB）
+  - 烧录后 `ps` 确认 velatime 仍在跑、`free` 显示空闲 53MB、WiFi 自动连上
+  - 启动 `ai_agent`，所有子系统 `rc=0`；用 `set_llm` 配置 Token Plan 端点
+  - `net_test` 通过：TLS 握手成功（TLSv1.2 / ECDHE-RSA-AES128-GCM-SHA256），HTTP 200
+  - `ask 只回复OK` 成功（7.5 秒拿到回复）
+- 遇到的问题与解决（三处时序缺陷，逐个定位）：
+  1. **带工具的请求永久卡死**（>3 分钟无输出）
+     - 读 `vela_tls.c` 找到三个叠加因素：
+       a. WiFi 省电挂起后 keep-alive 连接实际已失效，但复用前的排空探测检测不到
+       b. `AGENT_LLM_SOCKET_TIMEOUT_SEC = 120`，一次读要等 120 秒
+       c. `tls_read_response` 的循环里 `ret == MBEDTLS_ERR_SSL_WANT_READ`
+          时既不 break 也不计数 → 无限重试
+     - 修法：`pool_acquire` 不再复用旧连接（每次重新握手，多约 1 秒）；
+       `WANT_READ` 加 30 次上限
+  2. **watchdog 误判超时**（`call took 2748555189 ms`）
+     - 时钟只在首次 TLS 握手时才从 1970 拨到 2026，而 watchdog 在请求开始取
+       `t0=1970`、结束取 `t1=2026`，差值 56 年被 `uint32` 截断后仍是天文数字；
+       `calc_elapsed_ms` 只防了时钟倒退，没防前跳
+     - 修法：①启动早期（P0 阶段）就拨正时钟；②`calc_elapsed_ms` 增加前跳保护
+       （单次差 >600 秒按时钟跳变处理）；③超时 60→150 秒、socket 120→180 秒
+     - 结果：工具调用链跑通（read_file 4.5 秒 → get_current_time → 第三次请求）
+  3. **整条链路累计超时导致 AP 看门狗复位**
+     - 单次 LLM 调用实测 86 秒，多轮叠加后触发 `Crash happened from bes ap wdt`
+     - 结论：**API 链路本身完全正常**（TLS / 鉴权 / 模型 / 工具调用全部成功），
+       瓶颈是板子看门狗等不了多轮对话；建议换更快的模型
+- 验证：`net_test` HTTP 200；`ask` 简单问答 7.5 秒成功；工具调用链跑通
+
+## 阶段 13：真机时间问题（9/19 深夜 ~ 9/20）
+
+**现象**：表盘时间和现实对不上（先是停在 1970，校时后又慢 8 小时）。
+
+- 三个独立问题：
+  1. **系统时钟停在 1970**
+     - 板子没有带电池的 RTC，上电即 1970；
+       NSH 的 `date` 是只读命令（`date -s` 报 too many arguments）
+     - 修法：新增 `time_sync` 工具，用**明文 HTTP** 读网站响应头的
+       `Date:` 字段校时。
+       **为什么必须是 HTTP 而不是 HTTPS**：HTTPS 要过证书校验，而证书校验
+       依赖正确的时钟 —— 板子上电是 1970，会形成死循环；明文 HTTP 不需要
+       TLS，因此不依赖系统时钟，任何状态下都能取到真实时间。
+     - 顺带踩坑：NuttX 的 libc `scanf` 不支持 `%[^,]` 字符类转换，
+       最初报 `bad Date header: Sat, 19 Sep 2026 15:05:04 GMT`
+       —— 网络已经取到正确时间了，是解析失败。改为先用 `strchr` 跳过
+       `"Sat, "` 前缀，再用普通 `%d %7s %d %d:%d:%d` 解析。
+  2. **表盘慢 8 小时（时区）**
+     - `ui_home.c` 用 `localtime_r()`，它依赖 `TZ` 环境变量；
+       NuttX 遇到 POSIX TZ 串（`"CST-8"`）会去找 zoneinfo 文件，
+       找不到就**静默退回 UTC** —— 这正是慢 8 小时的原因
+     - 修法：新增 `include/velatime_time.h`，手工做 UTC+8 换算，不依赖 TZ
+  3. **影响面比表盘更大**
+     - 项目里共有 **9 处** 时间换算受影响：
+       `ui_home.c`（表盘）、`ui_tasks.c`（今天/明天/已超期）、
+       `velatime_main.c`（提醒的星期）、`core_recommend.c`（紧急度与日历天差）
+     - 全部统一到 `velatime_localtime()` / `velatime_mktime()`
+       （`mktime` 同样依赖 TZ，`timegm` 才不依赖）
+- 过程中的一次返工（如实记录）：
+  - 第一版改时区的脚本先删掉了 `+8`、第二个脚本又删了常量定义却没换成函数
+    调用，结果变成纯 UTC；用户反馈"小时还是不对"后才发现并修正。
+    修正后加了全项目扫描自检，确认无漏网的 `localtime_r` / `mktime`。
+- 验证（真机）：
+  ```
+  $ date
+  Sat, Sep 19 15:40:17 2026            <- 系统时钟（UTC）
+
+  $ time_sync
+  time_sync: www.baidu.com -> 1789832424
+  time_sync: clock set to 2026-09-19 23:40:24 CST (UTC+8)
+  ```
+  同时刻主机北京时间 23:40:24（**分秒不差**），表盘显示 23:40，
+  用户确认"没有问题了"。**开机自动校时生效，无需任何手动操作。**
