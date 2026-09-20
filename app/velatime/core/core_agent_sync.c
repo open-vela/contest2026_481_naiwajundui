@@ -142,12 +142,142 @@ static uint32_t hash_bytes(uint32_t hash, const char *data, size_t length)
   return hash;
 }
 
+/* ------------------------------------------------------------------ */
+/* 任务行解析（2026-09-20 重写）                                        */
+/*                                                                    */
+/* 为什么不用 sscanf：NuttX 的 libc 不支持 "%[...]" 字符类转换。         */
+/* 原来这里是                                                        */
+/*     sscanf(line, "- [%c] [%15[^]]] %127[^\n]", ...)                */
+/*     sscanf(line, "- [%c] %127[^\n]", ...)                          */
+/* 在真机上两处都只转换成功 %c，返回值既不等于 3 也不等于 2，           */
+/* 于是【每一行都被跳过】，任务文件永远解析出 0 条 → 任务列表被清空。    */
+/* 模拟器用 glibc，支持字符类，所以一直没暴露。                          */
+/* 这里改成 strchr + memcpy 手工解析，任何 libc 都成立。                 */
+/*                                                                    */
+/* 支持两种写法：                                                      */
+/*     - [ ] [2026-09-21] 标题                                        */
+/*     - [ ] 标题                                                     */
+/* 返回 0 表示解析成功，-1 表示这一行不是任务行。                        */
+/* ------------------------------------------------------------------ */
+
+static int parse_task_line(const char *line, char *mark,
+                           char *date, size_t date_size,
+                           char *title, size_t title_size)
+{
+  const char *p = line;
+  const char *end;
+  size_t n;
+
+  if (line == NULL || mark == NULL || date == NULL || title == NULL ||
+      date_size == 0 || title_size == 0)
+    {
+      return -1;
+    }
+
+  date[0] = '\0';
+  title[0] = '\0';
+
+  /* 允许行首空白 */
+  while (*p == ' ' || *p == '\t')
+    {
+      p++;
+    }
+
+  /* 前缀 "- ["（'-' 后允许若干空格，兼容 "-  [ ] 标题"） */
+  if (*p != '-')
+    {
+      return -1;
+    }
+
+  p++;
+
+  while (*p == ' ' || *p == '\t')
+    {
+      p++;
+    }
+
+  if (*p != '[')
+    {
+      return -1;
+    }
+
+  p++;
+
+  /* 状态标记：' ' 待办 / 'x' 已完成 / '>' 进行中 / '~' 已延后 */
+  if (*p == '\0' || *p == '\n' || *p == '\r')
+    {
+      return -1;
+    }
+
+  *mark = *p;
+  p++;
+
+  if (*p != ']')
+    {
+      return -1;
+    }
+
+  p++;
+
+  while (*p == ' ' || *p == '\t')
+    {
+      p++;
+    }
+
+  /* 可选的 [YYYY-MM-DD] 截止日期 */
+  if (*p == '[')
+    {
+      end = strchr(p, ']');
+      if (end == NULL)
+        {
+          return -1;
+        }
+
+      n = (size_t)(end - (p + 1));
+      if (n >= date_size)
+        {
+          n = date_size - 1;
+        }
+
+      memcpy(date, p + 1, n);
+      date[n] = '\0';
+
+      p = end + 1;
+
+      while (*p == ' ' || *p == '\t')
+        {
+          p++;
+        }
+    }
+
+  /* 剩下的都是标题：去掉尾部换行与空白 */
+  end = p + strlen(p);
+  while (end > p &&
+         (end[-1] == ' ' || end[-1] == '\t' ||
+          end[-1] == '\r' || end[-1] == '\n'))
+    {
+      end--;
+    }
+
+  n = (size_t)(end - p);
+  if (n >= title_size)
+    {
+      n = title_size - 1;
+    }
+
+  memcpy(title, p, n);
+  title[n] = '\0';
+
+  return 0;
+}
+
 static int read_agent_tasks(velatime_task_t *tasks, int *task_count,
                             uint32_t *content_hash)
 {
   FILE *fp;
   char line[256];
   int count = 0;
+  int skipped = 0;
   uint32_t hash = 2166136261u;
 
   fp = fopen(AGENT_TASKS_FILE, "r");
@@ -170,15 +300,13 @@ static int read_agent_tasks(velatime_task_t *tasks, int *task_count,
       /* 行格式：- [ ] [YYYY-MM-DD] 标题
        * 标记位支持四种，便于把"进行中/已延后"也持久化：
        *   ' ' 待办    'x' 已完成    '>' 进行中    '~' 已延后
-       * 标题里出现中文括号（如"（约半小时）"）时不再截断。 */
-      if (sscanf(line, "- [%c] [%15[^]]] %127[^\n]", &mark, date, title) != 3)
+       * 标题里出现中文括号（如"（约半小时）"）时不再截断。
+       * 注意：这里必须用手工解析，不能用 sscanf —— 原因见 parse_task_line 上方注释。 */
+      if (parse_task_line(line, &mark, date, sizeof(date),
+                          title, sizeof(title)) != 0)
         {
-          /* 没有截止日期的写法也要兼容：- [>] 标题 */
-          if (sscanf(line, "- [%c] %127[^\n]", &mark, title) != 2)
-            {
-              continue;
-            }
-          date[0] = '\0';
+          skipped++;
+          continue;
         }
 
       trim_title(title);
@@ -237,6 +365,13 @@ static int read_agent_tasks(velatime_task_t *tasks, int *task_count,
 
   *task_count = count;
   *content_hash = hash;
+
+  if (skipped > 0)
+    {
+      printf("VelaTime: skipped %d unparsable line(s) in %s\n",
+             skipped, AGENT_TASKS_FILE);
+    }
+
   return 0;
 }
 
